@@ -79,7 +79,8 @@ char vbat[6];
 char timer1str[5];
 
 TinyGsm modem(Serial1);
-TinyGsmClient client(modem,2);
+TinyGsmClient client(modem, 1);
+TinyGsmClient client2(modem, 2);
 PubSubClient mqtt(client);
 
 long lastReconnectAttempt = 0;
@@ -310,19 +311,19 @@ void sendPosition(){
             
         Serial.println(data);
 
-//          TinyGsmClient client(modem, 2);
+          
           const char server[] = "128.199.174.173";
           const int port = 5001;
           Serial.print("Conn ");
           Serial.print(server);
-          if (!client.connect(server, port)) {
+          if (!client2.connect(server, port)) {
 
             Serial.println("fail");
           } else {
-            client.print(data);
+            client2.print(data);
             // Wait for data to arrive
             uint32_t start = millis();
-            while (client.connected() && !client.available() &&
+            while (client2.connected() && !client2.available() &&
                    millis() - start < 30000L) {
               delay(100);
             };
@@ -330,14 +331,14 @@ void sendPosition(){
             // Read data
             start = millis();
             Serial.print(". ret=");
-            while (client.connected() && millis() - start < 5000L) {
-              while (client.available()) {
-                Serial.write(client.read());
+            while (client2.connected() && millis() - start < 5000L) {
+              while (client2.available()) {
+                Serial.write(client2.read());
                 start = millis();
               }
             }
             Serial.println("");
-            client.stop();
+            client2.stop();
             Serial.println("ok");
           }
           time2 = millis();
@@ -383,19 +384,7 @@ void setup(){
 }
 
 void GPRSLoop(){
-  if (!mqtt.connected()) {
-    Serial.println("MQTT NOT CONN");
-    // Reconnect every 10 seconds
-//    unsigned long t = millis();
-//    if (t - lastReconnectAttempt > 10000L) {
-//      lastReconnectAttempt = t;
-//      if (mqttConnect()) {
-//        lastReconnectAttempt = 0;
-//      }
-//    }
-    delay(100);
-    return;
-  }else{
+  if (mqtt.connected()) {
       mqtt.loop();
   }
 }
