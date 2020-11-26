@@ -96,35 +96,33 @@ void mqttCallback(char* topic, byte* payload, unsigned int len) {
   Serial.write(payload, len);
   Serial.println();
   String _topic(topic);
-  if(_topic.equals("refresh/all")){
-      mqttPublishAll();
-    }
+//  if(_topic.equals("refresh/all")){
+//      mqttPublishAll();
+//    }
   if(_topic.equals(relay1PushTopic)){
     pushRelay1();
-    mqttPublishAll();
     }
   if(_topic.equals(timer1PushTopic)){
-      char p[len];
+      char p[len+1];
+      p[len]=0;
       strncpy(p, (char*)payload, len);
       String _payload(p); 
+      int newtimer = _payload.toInt();
+      if (newtimer > 30) newtimer = 30;
       Serial.print("_payload=");
-      Serial.println(_payload);
+      Serial.println(newtimer);
       if (relay1 == true)
       {
-        timer1 = _payload.toInt();
-        if (timer1 > 30)
-          timer1 = 30;
+        timer1 = newtimer;
       }
       else
       {
-        defaultTimer1 = _payload.toInt();
-        if (defaultTimer1 > 30)
-          defaultTimer1 = 30;
-        timer1 = defaultTimer1;
+        defaultTimer1 = newtimer;
+        timer1 = newtimer;
       }
       
-      mqttPublishAll();
   }
+  mqttPublishAll();
 }
 
 boolean mqttConnect() {
@@ -149,46 +147,54 @@ boolean mqttConnect() {
   return mqtt.connected();
 
 }
+
+int mincount = 6;
+
 void detection(){
   if (relay1 == true && timer1 < 1) {
       pushRelay1(); // остановка прогрева если закончился отсчет таймера
-    } else if(relay1 == true) {
-      timer1-=1;
-    }
-  if (!mqtt.connected()) {
-    Serial.println("MQTT NOT CONN");
-    if (mqttConnect()) {
-        mqttPublishAll();
+    } 
+    
+    if (!mqtt.connected()) {
+      Serial.println("MQTT NOT CONN");
+      if (mqttConnect()) {
+          mqttPublishAll();
+      } else {
+        Serial.println("reset");
+        resetFunc();
+        }
     } else {
-      Serial.println("reset");
-      resetFunc();
-      }
-  } else {
-    mqttPublishAll();
+      mqttPublishAll();
     }
+  if(mincount<=0){
+    mincount=6;
+    if(relay1 == true) {
+          timer1-=1;
+    }
+  }
   
-
-  if (fix.valid.date && fix.valid.altitude && fix.valid.location && fix.valid.speed) {
-    float speed=fix.speed_kph();
-    unsigned long m=millis();
-    if(speed>60) {
-      sendPosition();
-      
-      }
-    else if(speed>=30 && m>=time2+30000){
-      sendPosition();
-      
-      }
-    else if(speed>=10 && m>=time2+60000){
-      sendPosition();
-      
-      }
-    else if(m>=time2+120000){
-      sendPosition();
-      
-      }
-     }
-  
+    if (fix.valid.date && fix.valid.altitude && fix.valid.location && fix.valid.speed) {
+      float speed=fix.speed_kph();
+      unsigned long m=millis();
+      if(speed>60) {
+        sendPosition();
+        
+        }
+      else if(speed>=30 && m>=time2+30000){
+        sendPosition();
+        
+        }
+      else if(speed>=10 && m>=time2+60000){
+        sendPosition();
+        
+        }
+      else if(m>=time2+120000){
+        sendPosition();
+        
+        }
+       }
+    
+  mincount--;
   }
   
 void mqttPublishAll(){
