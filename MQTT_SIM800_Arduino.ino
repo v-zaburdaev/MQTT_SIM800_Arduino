@@ -55,12 +55,20 @@ const char* broker = "95.79.40.140";
 const char* mqttuser = "starex";
 const char* mqttpass = "starex1133";
 int mqttport = 1883;
-
+  
+const char trackingServer[] = "95.79.40.140";
+const int trackingPort = 5000;
+  
 const char* refreshTopic = "refresh/all";
 const char* relay1PushTopic= "push/relay1";
 const char* timer1PushTopic= "push/timer1";
 const char* relay1StateTopic= "state/relay1";
+const char* ok = " ok";
+const char* fail = " fail";
+const char* connectto="Connect to ";
 
+bool hasModem=true;
+bool lowVoltage=false;
 bool relay1 = false;
 int timer1 = 10;
 int defaultTimer1 = 10;
@@ -69,14 +77,16 @@ char temperature[6];
 unsigned long time1=0, time2=0;
 
 float Vbat, V_min; // переменная хранящая напряжение бортовой сети
-float m = 57.701915071; //58.3402489626556;                            // делитель для перевода АЦП в вольты для резистров 39/10kOm
+float m = 57.701915071; 
 
 String imei;
 String simno;
-
+String lat = "NA";
+String lon = "NA";
 char  uptime[6];
 char vbat[6];
 char timer1str[5];
+int nacount=0;
 
 TinyGsm modem(Serial1);
 TinyGsmClient client(modem, 1);
@@ -90,15 +100,12 @@ void (*resetFunc)(void) = 0; //declare reset function @ address 0
 
 void mqttCallback(char* topic, byte* payload, unsigned int len) {
   
-  Serial.print("Message arrived [");
+  Serial.print("Msg ");
   Serial.print(topic);
-  Serial.print("]: ");
+  Serial.print(": ");
   Serial.write(payload, len);
   Serial.println();
   String _topic(topic);
-//  if(_topic.equals("refresh/all")){
-//      mqttPublishAll();
-//    }
   if(_topic.equals(relay1PushTopic)){
     pushRelay1();
     }
@@ -109,8 +116,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int len) {
       String _payload(p); 
       int newtimer = _payload.toInt();
       if (newtimer > 30) newtimer = 30;
-      Serial.print("_payload=");
-      Serial.println(newtimer);
       if (relay1 == true)
       {
         timer1 = newtimer;
@@ -132,20 +137,36 @@ boolean mqttConnect() {
   boolean status = mqtt.connect("STAREX", mqttuser, mqttpass);
 
   reconnectTry++;
-  Serial.print("Conn mqtt");
+  Serial.print("Connect mqtt");
   if (status == false) {
-    Serial.println(" fail");
+    Serial.println(fail);
     if(reconnectTry>2){
       resetFunc();
     }
     return false;
   }
-  Serial.println(" ok");
+  Serial.println(ok);
   mqtt.subscribe(refreshTopic);
   mqtt.subscribe(relay1PushTopic);
   mqtt.subscribe(timer1PushTopic);
   return mqtt.connected();
 
+}
+
+
+boolean trackingConnect(){
+
+    Serial.print(connectto);
+    Serial.print(trackingServer);
+    Serial.print(":");
+    Serial.print(trackingPort);
+    if (!client2.connect(trackingServer, trackingPort)) {
+      Serial.println(fail);
+      return false;
+    } else {
+      Serial.println(ok);
+      return true;
+    }
 }
 
 int mincount = 6;
@@ -154,28 +175,36 @@ void detection(){
   if (relay1 == true && timer1 < 1) {
       pushRelay1(); // остановка прогрева если закончился отсчет таймера
     } 
-    
-    if (!mqtt.connected()) {
-      Serial.println("MQTT NOT CONN");
-      if (mqttConnect()) {
+    if(mincount<=0){
+      mincount=6;
+      if(hasModem){
+        if (!mqtt.connected()) {
+          Serial.println("NO MQTT");
+          if (mqttConnect()) {
+              mqttPublishAll();
+          } else {
+            resetFunc();
+            }
+        } else {
           mqttPublishAll();
-      } else {
-        Serial.println("reset");
+        }
+        
+    } 
+      if(relay1 == true) {
+            timer1-=1;
+      }
+      if(!hasModem){
         resetFunc();
         }
-    } else {
-      mqttPublishAll();
     }
-  if(mincount<=0){
-    mincount=6;
-    if(relay1 == true) {
-          timer1-=1;
-    }
-  }
-  
+
     if (fix.valid.date && fix.valid.altitude && fix.valid.location && fix.valid.speed) {
       float speed=fix.speed_kph();
       unsigned long m=millis();
+      nacount=0;
+      lat = lonlatddmmss(fix.latitudeDMS);
+      lon = lonlatddmmss(fix.longitudeDMS);
+
       if(speed>60) {
         sendPosition();
         
@@ -189,31 +218,42 @@ void detection(){
         
         }
       else if(m>=time2+120000){
-        sendPosition();
-        
+        sendPosition();        
         }
-       }
-    
+       } else {
+        
+        nacount++;
+        if(nacount>30){
+          lat="NA";
+          lon="NA";  
+          }      
+        
+       } 
+
+
   mincount--;
   }
   
 void mqttPublishAll(){
-    float _Vbat = VoltRead(); // замеряем напряжение на батарее
-    dtostrf(_Vbat, 0, 1, vbat);
+    Vbat = voltRead(); // замеряем напряжение на батарее
+    dtostrf(Vbat, 0, 1, vbat);
     dtostrf(timer1, 0, 0, timer1str);
     sensors.requestTemperatures(); // Send the command to get temperature readings 
-    Serial.print("T: "); 
     float t = sensors.getTempCByIndex(0);
     dtostrf(t, 0, 1, temperature);
-    Serial.println(temperature );
-    String(millis()/3600000,0).toCharArray(uptime,6);
-    
-
+    float utime = (float)millis()/3600000;
+    dtostrf(utime, 0, 1, uptime);
+    Serial.println(".");
+    char latlonchar[32];
     mqtt.publish("state/vbat", vbat);
     mqtt.publish("state/uptime", uptime);
     mqtt.publish("state/relay1", relay1 ? "start" : "stop");
     mqtt.publish("state/timer1", timer1str);
     mqtt.publish("state/temperature", temperature);
+//    https://yandex.ru/maps/?pt=30.335429,59.944869&z=18&l=map
+
+    String(lat+String(",")+lon).toCharArray(latlonchar, 32);
+    mqtt.publish("state/position", latlonchar);
     
           
 
@@ -221,9 +261,6 @@ void mqttPublishAll(){
 
 
 void sendPosition(){
-// imei:353451044508750,001,0809231929,13554900601,F,055403.000,A,2233.1870,N,11354.3067,E,0.00,30.1,65.43,1,0,10.5%,0.0%,28;
-// imei:359587010124900,tracker,0809231929,13554900601,F,112909.397,A,2234.4669,N,11354.3287,E,0.11,;  
-//For example:
 //imei:353451044508750,001,0809231929,13554900601,F,055403.000,A,2233.1870,N,11354.3067,E,0.00,30.1,65.43,1,0,10.5%,0.0%,28;
 //
 //Content specification
@@ -250,35 +287,17 @@ void sendPosition(){
 //Content after the eighteenth comma is: The current temperature sensor indicated
 //End with a semicolon after the nineteenth comma.
 
-    //      imei,command,time,Cell phone number,latitude,S/N,Longitude,E/W,Speed,direction,/request address
-
-
-//This is likely TK103 and TK110 devices. But it's not for sure.
-//
-//The other xexun devices that send messages in one of the following formats are identified by IMEI as usual:
-//imei:864895030551111,tracker,191003074503,,F,044503.00,A,4700.08753,N,02853.79387,E,4.985,327.55;
-//imei:865472036980071,tracker,201125105210,,F,017390.00,A,5627.24410,N,04397.86620,E,0.09,0;
-//imei:866771024070798,tracker,1312170400,,F,230030.000,A,2455.3288,N,06705.8537,E,0.00,0,,0,0,0.00%,,;
-
-//imei:865472036980071,tracker,201125104133,,F,018850.00,A,56272.49,N,43978.59,E,0.02,0;
-//190926151811,+31711117111,GPRMC,151811.775,A,5215.5816,N,00508.7693,E,28.31,83.20,260919,,,A*6D,F,SHAKE, imei:354778030121111,03,1.3,F:4.14V,1,143,5451,204,08,0D2A,B6E5\n\r
-//
-//This is likely TK102, TK102-2 and TK103-2, but it's not for sure either.
-
 
 // TRACCAR TEST
 //imei:868683023212255,tracker,190205084503,,F,064459.000,A,4915.1221,N,01634.5655,E,3.91,83.95;
-//imei:865472036980071,tracker,201125122553,,F,122553.000,A,5627.2461,N,4397.8662,E,0.27,0,17370.00,0,0,1%,1%,1,10;
 
 
-//if (fix.valid.date && fix.valid.altitude && fix.valid.location && fix.valid.speed) {
+
         char buffer[20];
         int32_t altitude_cm =fix.altitude_cm();
         uint16_t hdg = fix.heading_cd();
         float speed = fix.speed_kph();
 
-        String lat = lonlatddmmss(fix.latitudeDMS);
-        String lon = lonlatddmmss(fix.longitudeDMS);
 
         String data="imei:"+imei+",tracker,";
         // add date
@@ -304,9 +323,8 @@ void sendPosition(){
 
         data+=".000,A,";
         
-    
-          data+=lat+","+fix.latitudeDMS.NS()+","; 
-          data+=lon+","+fix.longitudeDMS.EW()+",";
+        data+=lat+","+fix.latitudeDMS.NS()+","; 
+        data+=lon+","+fix.longitudeDMS.EW()+",";
         
         data+=String(speed)+",";
         data+=String(hdg)+",";
@@ -314,79 +332,70 @@ void sendPosition(){
         data+="0,0,1%,1%,";
         data+=String(temperature);
         data+=";"; // ignition, door, fuel1, fuel2, temperature
-            
         Serial.println(data);
 
+        if(hasModem){
+          if(trackingConnect()){
+              Serial.print("Send...");
+              client2.print(data);
+              // Wait for data to arrive
+              uint32_t start = millis();
+              while (client2.connected() && !client2.available() &&
+                     millis() - start < 10000L) {
+                delay(100);
+              };
           
-          const char server[] = "128.199.174.173";
-          const int port = 5001;
-          Serial.print("Conn ");
-          Serial.print(server);
-          if (!client2.connect(server, port)) {
-
-            Serial.println("fail");
-          } else {
-            client2.print(data);
-            // Wait for data to arrive
-            uint32_t start = millis();
-            while (client2.connected() && !client2.available() &&
-                   millis() - start < 30000L) {
-              delay(100);
-            };
-        
-            // Read data
-            start = millis();
-            Serial.print(". ret=");
-            while (client2.connected() && millis() - start < 5000L) {
-              while (client2.available()) {
-                Serial.write(client2.read());
-                start = millis();
+              // Read data
+              start = millis();
+              
+              while (client2.connected() && millis() - start < 5000L) {
+                while (client2.available()) {
+                  Serial.write(client2.read());
+                  start = millis();
+                }
               }
+              Serial.println(ok);
             }
-            Serial.println("");
-            client2.stop();
-            Serial.println("ok");
-          }
+        }
+          client2.stop();
           time2 = millis();
 
-//      }
-        
-  
   }
 
 String lonlatddmmss(DMS_t latitudeDMS){
-  String outs="";
-    outs+=latitudeDMS.degrees;
-
-  if (latitudeDMS.minutes < 10)
-    outs+='0';
-  outs+=latitudeDMS.minutes;
-  outs+='.';
-
-  uint16_t mmmm = latitudeDMS.seconds_whole * 166;  // same as 10000/60, less .66666...
-  mmmm += (latitudeDMS.seconds_whole * 2 + latitudeDMS.seconds_frac/2 ) / 3;  // ... plus the remaining .66666
-
-  //  print leading zeroes, if necessary
-  if (mmmm < 1000)
-    outs+='0';
-  if (mmmm <  100)
-    outs+='0';
-  if (mmmm <   10)
-    outs+='0';
-  outs+=mmmm;
-  return outs;
+    String outs="";
+      outs+=latitudeDMS.degrees;
   
-  }
+    if (latitudeDMS.minutes < 10)
+      outs+='0';
+    outs+=latitudeDMS.minutes;
+    outs+='.';
+  
+    uint16_t mmmm = latitudeDMS.seconds_whole * 166;  // same as 10000/60, less .66666...
+    mmmm += (latitudeDMS.seconds_whole * 2 + latitudeDMS.seconds_frac/2 ) / 3;  // ... plus the remaining .66666
+  
+    //  print leading zeroes, if necessary
+    if (mmmm < 1000)
+      outs+='0';
+    if (mmmm <  100)
+      outs+='0';
+    if (mmmm <   10)
+      outs+='0';
+    outs+=mmmm;
+    return outs;
+    
+}
 
 void setup(){
-  //Hardware serial initializacion
-  Serial.begin(9600);
-  sensors.begin(); 
-  pinMode(RESET_Pin, OUTPUT);
-  pinMode(FIRST_P_Pin, OUTPUT);
-  SIM800_reset();
-  initGPRSWithMqtt();
-  time2=millis();
+    //Hardware serial initializacion
+    Serial.begin(9600);
+    sensors.begin(); 
+    pinMode(RESET_Pin, OUTPUT);
+    pinMode(FIRST_P_Pin, OUTPUT);
+    pinMode(BAT_Pin, INPUT);
+    SIM800_reset();
+    initGPRSWithMqtt();
+    time2=millis();
 }
 
 void GPRSLoop(){
@@ -395,8 +404,7 @@ void GPRSLoop(){
   }
 }
 
-void GPSloop()
-{
+void GPSloop(){
   
   while (gps.available( Serial )) {
     fix = gps.read();
@@ -406,14 +414,17 @@ void GPSloop()
 
 void loop(){
   GPSloop();
-  GPRSLoop();
+  if(hasModem){
+      GPRSLoop();
+    }
+  
   
   if (millis() > time1 + 10000)
-    time1 = millis(), detection(); // выполняем функцию detection () каждые 60 сек
+    time1 = millis(), detection(); // выполняем функцию detection () каждые 10 сек
 }
 
 
-float VoltRead() { // замеряем напряжение на батарее и переводим значения в вольты
+float voltRead() { // замеряем напряжение на батарее и переводим значения в вольты
   float ADCC = analogRead(BAT_Pin);
   float realadcc = ADCC;
   ADCC = ADCC / m;
@@ -427,6 +438,7 @@ void SIM800_reset(){
   digitalWrite(RESET_Pin, LOW);
   delay(400);
   digitalWrite(RESET_Pin, HIGH); // перезагрузка модема
+  delay(200);
 }
 
 
@@ -441,39 +453,52 @@ void pushRelay1() {
 
 void initGPRSWithMqtt(){
   Serial1.begin(9600);
-  Serial.println("Init modem...");
-  modem.restart();
-  String modemInfo = modem.getModemInfo();
-  Serial.print("Modem: ");
-  Serial.println(modemInfo);
-  if (!modem.hasSSL()) {
-    Serial.println(F("No SSL"));
-    Serial.println("reset");
-    resetFunc();
-  }else{
-    Serial.println("Have SSL");    
-  }
-  imei = modem.getIMEI();
-  
-  
-  Serial.print("Wait network");
-  if (!modem.waitForNetwork()) {
-    Serial.println(" fail");
-      resetFunc();
-  }else{
-    Serial.println(" OK");
-  }
-  Serial.print("Conn to ");
-  Serial.print(apn);
-  if (!modem.gprsConnect(apn, user, pass)) {
-    Serial.println(" fail");
-      resetFunc();
-  }
-  Serial.println(" OK");
+  float volt = voltRead();
+  if(volt<5){
+      Serial.println("Low voltage.");
+      lowVoltage=true;
+      hasModem=false;
+      digitalWrite(RESET_Pin, LOW);
+    } else {
+      lowVoltage=false;
+      Serial.println("Init modem.");
+      modem.restart();
+      String modemInfo = modem.getModemInfo();
+      if(modemInfo.length()>0){
+          Serial.print("Modem: ");
+          Serial.println(modemInfo);
+          hasModem=true;
+        } else {
+          Serial.println("No Modem");      
+          hasModem=false;
+        }
+      if(hasModem){
+    
+          imei = modem.getIMEI();
+          
+          
+          Serial.print("Wait network");
+          if (!modem.waitForNetwork()) {
+            Serial.println(fail);
+              resetFunc();
+          }else{
+            Serial.println(ok);
+          }
+          Serial.print(connectto);
+          Serial.print(apn);
+          if (!modem.gprsConnect(apn, user, pass)) {
+            Serial.println(fail);
+              resetFunc();
+          }
+          Serial.println(ok);
+        
+          // MQTT Broker setup
+          mqtt.setServer(broker, 1883);
+          mqtt.setCallback(mqttCallback);
+          mqttConnect(); 
+      }      
+      }
 
-  // MQTT Broker setup
-  mqtt.setServer(broker, 1883);
-  mqtt.setCallback(mqttCallback);
-  mqttConnect(); 
-  
+
+    
 }
